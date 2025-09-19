@@ -1,0 +1,161 @@
+console.log("Email Writer Extension - Content Script Loaded");
+
+function createToneDropdown() {
+  const select = document.createElement('select');
+  select.className = 'ai-tone-dropdown';
+  select.style.marginRight = '8px';
+  select.style.padding = '5px 8px';
+  select.style.borderRadius = '6px';
+  select.style.border = '1px solid #1a73e8'; // Gmail blue
+  select.style.backgroundColor = '#f8f9fa';
+  select.style.fontSize = '14px';
+  select.style.color = '#202124';
+  select.style.cursor = 'pointer';
+  select.style.boxShadow = '0 1px 2px rgba(60,64,67,.1)';
+  select.style.transition = 'border-color 0.2s ease-in-out';
+
+  const tones = ['Professional', 'Friendly', 'Family', 'Casual', 'Confident'];
+  tones.forEach(tone => {
+    const option = document.createElement('option');
+    option.value = tone.toLowerCase();
+    option.text = tone;
+    select.appendChild(option);
+  });
+
+  return select;
+}
+
+function createAIButton() {
+  const button = document.createElement('div');
+  button.className = 'T-I J-J5-Ji aoO v7 T-I-atl L3 ai-reply-button';
+  button.style.marginRight = '8px';
+  button.innerHTML = 'AI Reply';
+  button.setAttribute('role', 'button');
+  button.setAttribute('data-tooltip', 'Generate AI Reply');
+  return button;
+}
+
+// This gets selected text if user highlights anything
+function getSelectedText() {
+  const selection = window.getSelection();
+  return selection ? selection.toString().trim() : '';
+}
+
+function getEmailContent() {
+  const selectedText = getSelectedText();
+  if (selectedText.length > 0) {
+    return selectedText;
+  }
+
+  // Fallback if no selection
+  const selectors = ['.h7', '.a3s.aiL', '.gmail_quote', '[role="presentation"]'];
+  for (const selector of selectors) {
+    const content = document.querySelector(selector);
+    if (content) {
+      const text = content.innerText.trim();
+      if (text.length > 0) return text;
+    }
+  }
+
+  return null;
+}
+
+function findComposeToolbar() {
+  const selectors = ['.btC', '.aDh', '[role="toolbar"]', '.gU.Up'];
+  for (const selector of selectors) {
+    const toolbar = document.querySelector(selector);
+    if (toolbar) {
+      return toolbar;
+    }
+  }
+  return null;
+}
+
+function injectButton() {
+  const existingButton = document.querySelector('.ai-reply-button');
+  if (existingButton) existingButton.remove();
+
+  const existingDropdown = document.querySelector('.ai-tone-dropdown');
+  if (existingDropdown) existingDropdown.remove();
+
+  const toolbar = findComposeToolbar();
+  if (!toolbar) {
+    console.log("Toolbar not found");
+    return;
+  }
+
+  const toneDropdown = createToneDropdown();
+  const button = createAIButton();
+
+  button.addEventListener('click', async () => {
+    try {
+      const emailContent = getEmailContent();
+      if (!emailContent) {
+        alert("No valid text found in the email to generate a reply.");
+        return;
+      }
+
+      button.innerHTML = 'Generating...';
+      button.disabled = true;
+
+      const selectedTone = toneDropdown.value;
+
+      const response = await fetch('http://localhost:8080/api/email/generate', {
+        method: 'POST',
+        headers: {
+          'Content-type': 'application/json',
+        },
+        body: JSON.stringify({
+          emailContent: emailContent,
+          tone: selectedTone
+        })
+      });
+
+      if (!response.ok) {
+        throw new Error('API Request Failed');
+      }
+
+      const generatedReply = await response.text();
+
+      const composeBox = document.querySelector('[role="textbox"][g_editable="true"]');
+      if (composeBox) {
+        composeBox.focus();
+        document.execCommand('insertText', false, generatedReply);
+      } else {
+        console.log('Compose box not found');
+      }
+    } catch (error) {
+      console.error(error);
+      alert('Failed to generate reply');
+    } finally {
+      button.innerHTML = 'AI Reply';
+      button.disabled = false;
+    }
+  });
+
+  toolbar.insertBefore(toneDropdown, toolbar.firstChild);
+  toolbar.insertBefore(button, toolbar.children[1]);
+}
+
+const observer = new MutationObserver((mutations) => {
+  for (const mutation of mutations) {
+    const addedNodes = Array.from(mutation.addedNodes);
+    const hasComposeElements = addedNodes.some(node =>
+      node.nodeType === Node.ELEMENT_NODE &&
+      (
+        node.matches('.aDh, .btc, [role="dialog"]') ||
+        (node.querySelector && node.querySelector('.aDh, .btc, [role="dialog"]'))
+      )
+    );
+
+    if (hasComposeElements) {
+      console.log("Detected compose window.");
+      setTimeout(injectButton, 500);
+    }
+  }
+});
+
+observer.observe(document.body, {
+  childList: true,
+  subtree: true,
+});
